@@ -4,43 +4,50 @@ import * as zlib from 'zlib';
 function compressFile(filename: string): Promise<void> {
     const tempFilename = `${filename}.temp`;
 
-    fs.renameSync(filename, tempFilename);
+    return new Promise((resolve, reject) => {
+        // Rename the original file to a temporary file
+        fs.rename(filename, tempFilename, (renameErr) => {
+            if (renameErr) {
+                return reject(renameErr);
+            }
 
-    const deleteFile = (file: string): void => {
-        try {
-            fs.unlinkSync(file);
-        } catch (_err) {
-            /* istanbul ignore next */
-        }
-    };
+            // Create a readable stream from the temporary file
+            const readStream = fs.createReadStream(tempFilename);
+            const zipStream = zlib.createGzip();
+            const writeStream = fs.createWriteStream(filename);
 
-    try {
-        const read = fs.createReadStream(tempFilename);
-        const zip = zlib.createGzip();
-        const write = fs.createWriteStream(filename);
-        read.pipe(zip).pipe(write);
+            // Pipe the streams
+            readStream.pipe(zipStream).pipe(writeStream);
 
-        return new Promise((resolve, reject) => {
-            write.on(
-                'error',
-                /* istanbul ignore next */ err => {
-                    // close the write stream and propagate the error
-                    write.end();
-                    reject(err);
-                },
-            );
-            write.on('finish', () => {
-                resolve();
+            // Handle errors
+            writeStream.on('error', (writeErr) => {
+                // Try to clean up by deleting the temporary file
+                fs.unlink(filename, () => {
+                    reject(writeErr);
+                });
+            });
+
+            // Handle the end of the stream
+            writeStream.on('finish', () => {
+                // Delete the temporary file
+                fs.unlink(tempFilename, (unlinkErr) => {
+                    if (unlinkErr) {
+                        reject(unlinkErr);
+                    }
+                    resolve();
+                });
+            });
+
+            // Handle errors
+            readStream.on('error', (readErr) => {
+                reject(readErr);
+            });
+
+            zipStream.on('error', (zipErr) => {
+                reject(zipErr);
             });
         });
-    } catch (err) /* istanbul ignore next */ {
-        // in case of an error: remove the output file and propagate the error
-        deleteFile(filename);
-        throw err;
-    } finally {
-        // in any case: remove the temp file
-        deleteFile(tempFilename);
-    }
+    });
 }
 
 export { compressFile };
